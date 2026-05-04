@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="CG-Mag-Lab8.vcxproj" />
+  <Project Path="CG-Mag-Lab8.vcxproj" Id="b22ca8f1-d9fe-4654-93c6-4ec05df3665a" />
 </Solution>
