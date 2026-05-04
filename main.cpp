@@ -29,19 +29,34 @@ layout (vertices = 4) out;
 in vec2 TexCoord[];
 out vec2 TextureCoord[];
 
+uniform vec3 cameraPos; // Позиция камеры
+
 void main() {
     gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
     TextureCoord[gl_InvocationID] = TexCoord[gl_InvocationID];
 
     if(gl_InvocationID == 0) {
-        // Тесселяция 10x10 для квада
-        gl_TessLevelOuter[0] = 10.0;
-        gl_TessLevelOuter[1] = 10.0;
-        gl_TessLevelOuter[2] = 10.0;
-        gl_TessLevelOuter[3] = 10.0;
+        // Центр патча
+        vec3 p0 = gl_in[0].gl_Position.xyz;
+        vec3 p1 = gl_in[1].gl_Position.xyz;
+        vec3 p2 = gl_in[2].gl_Position.xyz;
+        vec3 p3 = gl_in[3].gl_Position.xyz;
+        vec3 center = (p0 + p1 + p2 + p3) * 0.25;
 
-        gl_TessLevelInner[0] = 10.0;
-        gl_TessLevelInner[1] = 10.0;
+        // Вычисляем расстояние от камеры до центра патча
+        float distance = distance(center, cameraPos);
+
+        // Расчет уровня тесселяции
+        float maxLevel = 32.0;
+        float tessLevel = max(1.0, maxLevel / (distance * 0.2)); // Коэффициент 0.2 для наглядности изменения
+
+        gl_TessLevelOuter[0] = tessLevel;
+        gl_TessLevelOuter[1] = tessLevel;
+        gl_TessLevelOuter[2] = tessLevel;
+        gl_TessLevelOuter[3] = tessLevel;
+
+        gl_TessLevelInner[0] = tessLevel;
+        gl_TessLevelInner[1] = tessLevel;
     }
 }
 )glsl";
@@ -49,7 +64,7 @@ void main() {
 // Tessellation Evaluation Shader
 const char* tesSource = R"glsl(
 #version 410 core
-layout (quads, fractional_odd_spacing, ccw) in;
+layout (quads, fractional_even_spacing, ccw) in;
 
 uniform sampler2D heightMap;
 uniform mat4 model;
@@ -143,9 +158,14 @@ GLuint generateHeightMap() {
 }
 
 // Глобальные переменные для камеры
-float cameraAngleX = 0.0f;
-float cameraAngleY = 0.0f;
-bool isDragging = false;
+glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 15.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+
+float yaw = -90.0f;
+float pitch = 0.0f;
+
+bool firstMouse = true;
 int lastMouseX, lastMouseY;
 
 int main() {
@@ -211,6 +231,10 @@ int main() {
     // Включаем отображение сетки для демонстрации тесселяции
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
+    // Захватываем курсор мыши
+    window.setMouseCursorGrabbed(true);
+    window.setMouseCursorVisible(false);
+
     bool running = true;
     while (running) {
         sf::Event event;
@@ -221,52 +245,61 @@ int main() {
             else if (event.type == sf::Event::Resized) {
                 glViewport(0, 0, event.size.width, event.size.height);
             }
-            else if (event.type == sf::Event::MouseButtonPressed) {
-                if (event.mouseButton.button == sf::Mouse::Left) {
-                    isDragging = true;
-                    lastMouseX = event.mouseButton.x;
-                    lastMouseY = event.mouseButton.y;
-                }
-            }
-            else if (event.type == sf::Event::MouseButtonReleased) {
-                if (event.mouseButton.button == sf::Mouse::Left) {
-                    isDragging = false;
-                }
-            }
             else if (event.type == sf::Event::MouseMoved) {
-                if (isDragging) {
-                    int dx = event.mouseMove.x - lastMouseX;
-                    int dy = event.mouseMove.y - lastMouseY;
-                    cameraAngleX += dx * 0.01f;
-                    cameraAngleY += dy * 0.01f;
-                    
-                    if (cameraAngleY > 1.5f) cameraAngleY = 1.5f;
-                    if (cameraAngleY < -0.1f) cameraAngleY = -0.1f;
-                    
+                if (firstMouse) {
                     lastMouseX = event.mouseMove.x;
                     lastMouseY = event.mouseMove.y;
+                    firstMouse = false;
                 }
+
+                float xoffset = event.mouseMove.x - lastMouseX;
+                float yoffset = lastMouseY - event.mouseMove.y; // обратный по Y
+
+                lastMouseX = event.mouseMove.x;
+                lastMouseY = event.mouseMove.y;
+
+                float sensitivity = 0.1f;
+                xoffset *= sensitivity;
+                yoffset *= sensitivity;
+
+                yaw += xoffset;
+                pitch += yoffset;
+
+                if (pitch > 89.0f) pitch = 89.0f;
+                if (pitch < -89.0f) pitch = -89.0f;
+
+                glm::vec3 front;
+                front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+                front.y = sin(glm::radians(pitch));
+                front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+                cameraFront = glm::normalize(front);
             }
         }
+        
+        // Удерживаем мышь в центре окна
+        sf::Vector2i centerPos(window.getSize().x / 2, window.getSize().y / 2);
+        sf::Mouse::setPosition(centerPos, window);
+        lastMouseX = centerPos.x;
+        lastMouseY = centerPos.y;
 
         // Управление с клавиатуры (WASD и стрелочки)
-        float keySpeed = 0.02f;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
-            cameraAngleX -= keySpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
-            cameraAngleX += keySpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
-            cameraAngleY -= keySpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
-            cameraAngleY += keySpeed;
+        float cameraSpeed = 0.05f;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift)) {
+            cameraSpeed = 0.25f; // Ускорение при зажатом Shift
         }
 
-        // Ограничитель вращения после изменения клавишами
-        if (cameraAngleY > 1.5f) cameraAngleY = 1.5f;
-        if (cameraAngleY < -0.1f) cameraAngleY = -0.1f;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
+            cameraPos += cameraSpeed * cameraFront;
+        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
+            cameraPos -= cameraSpeed * cameraFront;
+        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
+            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
+            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+        }
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -275,13 +308,15 @@ int main() {
 
         glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)window.getSize().x / (float)window.getSize().y, 0.1f, 100.0f);
         
-        glm::vec3 cameraPos = glm::vec3(sin(cameraAngleX) * 15.0f, 5.0f + cameraAngleY * 10.0f, cos(cameraAngleX) * 15.0f);
-        glm::mat4 view = glm::lookAt(cameraPos, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
         glm::mat4 model = glm::mat4(1.0f);
 
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+        
+        // Передаем позицию камеры в TCS
+        glUniform3fv(glGetUniformLocation(shaderProgram, "cameraPos"), 1, glm::value_ptr(cameraPos));
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, heightMapTex);
