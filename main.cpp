@@ -110,11 +110,82 @@ void main() {
 const char* fragmentShaderSource = R"glsl(
 #version 410 core
 out vec4 FragColor;
-in float Height;
+in float HeightOut; // Из Geometry Shader
+
+in vec3 vertColor;
+uniform bool showNormals;
+
 void main() {
-    // Простая раскраска на основе высоты
-    vec3 color = mix(vec3(0.2, 0.6, 0.2), vec3(0.9, 0.9, 0.9), Height);
-    FragColor = vec4(color, 1.0);
+    if (showNormals) {
+        FragColor = vec4(vertColor, 1.0);
+    } else {
+        // Простая раскраска на основе высоты
+        vec3 color = mix(vec3(0.2, 0.6, 0.2), vec3(0.9, 0.9, 0.9), HeightOut);
+        FragColor = vec4(color, 1.0);
+    }
+}
+)glsl";
+
+// Geometry Shader
+const char* geometryShaderSource = R"glsl(
+#version 410 core
+layout(triangles) in;
+// Нам нужно выводить и треугольники (для ландшафта), и линии (для нормалей).
+// Максимум 3 вершины для исходного треугольника + 6 вершин для трех линий = 9 вершин
+layout(triangle_strip, max_vertices = 9) out; 
+
+in float Height[];
+out float HeightOut;
+out vec3 vertColor;
+
+uniform bool showNormals;
+
+void main() {
+    // 1. Всегда пробрасываем сам ландшафт (исходные треугольники)
+    for (int i = 0; i < 3; i++) {
+        gl_Position = gl_in[i].gl_Position;
+        HeightOut = Height[i];
+        vertColor = vec3(0.0); // Не используется, если showNormals == false (точнее используется как-то, но мы раскрашиваем по высоте)
+        EmitVertex();
+    }
+    EndPrimitive();
+
+    // 2. Если включен режим отладки, рисуем нормаль из центра треугольника
+    if (showNormals) {
+        // Вычисляем центр треугольника
+        vec3 p0 = gl_in[0].gl_Position.xyz;
+        vec3 p1 = gl_in[1].gl_Position.xyz;
+        vec3 p2 = gl_in[2].gl_Position.xyz;
+        vec3 center = (p0 + p1 + p2) / 3.0;
+
+        // Вычисляем нормаль (в screen space / clip space, но для отладки пойдет)
+        vec3 v0 = p1 - p0;
+        vec3 v1 = p2 - p0;
+        vec3 normal = normalize(cross(v0, v1));
+        
+        float normalLength = 2.0;
+
+        // Рисуем "линию" как очень тонкий треугольник (костыль, так как layout один)
+        // В OpenGL Geometry Shader может выдавать только один тип примитивов. 
+        // Мы используем triangle_strip.
+        
+        // Вершина 1: Центр (Зеленая)
+        gl_Position = vec4(center, gl_in[0].gl_Position.w);
+        vertColor = vec3(0.0, 1.0, 0.0); 
+        EmitVertex();
+
+        // Вершина 2: Смещение (Красная)
+        gl_Position = vec4(center + normal * normalLength, gl_in[0].gl_Position.w);
+        vertColor = vec3(1.0, 0.0, 0.0); 
+        EmitVertex();
+        
+        // Вершина 3: Маленькое смещение для формирования вырожденного треугольника
+        gl_Position = vec4(center + normal * normalLength + vec3(0.01, 0.0, 0.0), gl_in[0].gl_Position.w);
+        vertColor = vec3(1.0, 0.0, 0.0); 
+        EmitVertex();
+
+        EndPrimitive();
+    }
 }
 )glsl";
 
@@ -188,18 +259,21 @@ int main() {
     GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
     GLuint tcsShader = compileShader(GL_TESS_CONTROL_SHADER, tcsSource);
     GLuint tesShader = compileShader(GL_TESS_EVALUATION_SHADER, tesSource);
+    GLuint geometryShader = compileShader(GL_GEOMETRY_SHADER, geometryShaderSource);
     GLuint fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
 
     GLuint shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vertexShader);
     glAttachShader(shaderProgram, tcsShader);
     glAttachShader(shaderProgram, tesShader);
+    glAttachShader(shaderProgram, geometryShader);
     glAttachShader(shaderProgram, fragmentShader);
     glLinkProgram(shaderProgram);
 
     glDeleteShader(vertexShader);
     glDeleteShader(tcsShader);
     glDeleteShader(tesShader);
+    glDeleteShader(geometryShader);
     glDeleteShader(fragmentShader);
 
     // Вершины патча (квадрат 10x10)
@@ -236,6 +310,9 @@ int main() {
     window.setMouseCursorVisible(false);
 
     bool running = true;
+    bool showNormals = false; // Флаг режима показа нормалей
+    bool nKeyPressed = false; // Проверка отскока клавиши
+
     while (running) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -273,6 +350,17 @@ int main() {
                 front.y = sin(glm::radians(pitch));
                 front.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
                 cameraFront = glm::normalize(front);
+            }
+            else if (event.type == sf::Event::KeyPressed) {
+                if (event.key.code == sf::Keyboard::N && !nKeyPressed) {
+                    showNormals = !showNormals;
+                    nKeyPressed = true;
+                }
+            }
+            else if (event.type == sf::Event::KeyReleased) {
+                if (event.key.code == sf::Keyboard::N) {
+                    nKeyPressed = false;
+                }
             }
         }
         
@@ -326,6 +414,9 @@ int main() {
         
         // Передаем позицию камеры в TCS
         glUniform3fv(glGetUniformLocation(shaderProgram, "cameraPos"), 1, glm::value_ptr(cameraPos));
+
+        // Передаем uniform'ы для режима нормалей
+        glUniform1i(glGetUniformLocation(shaderProgram, "showNormals"), showNormals ? 1 : 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, heightMapTex);
