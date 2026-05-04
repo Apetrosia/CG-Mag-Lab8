@@ -294,11 +294,20 @@ int main() {
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
             cameraPos -= cameraSpeed * cameraFront;
         }
+        glm::vec3 cameraRight = glm::normalize(glm::cross(cameraFront, cameraUp));
+        glm::vec3 localUp = glm::normalize(glm::cross(cameraRight, cameraFront));
+
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
-            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+            cameraPos -= cameraRight * cameraSpeed;
         }
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
-            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * cameraSpeed;
+            cameraPos += cameraRight * cameraSpeed;
+        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) {
+            cameraPos += localUp * cameraSpeed; // Движение вверх относительно камеры
+        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::RControl)) {
+            cameraPos -= localUp * cameraSpeed; // Движение вниз относительно камеры
         }
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
