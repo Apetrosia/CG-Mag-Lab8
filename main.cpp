@@ -1,6 +1,5 @@
 #include <GL/glew.h>
 #include <SFML/Window.hpp>
-#include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
 #include <iostream>
 #include <vector>
@@ -38,8 +37,8 @@ void main() {
         vec3 p3 = gl_in[3].gl_Position.xyz;
         vec3 center = (p0 + p1 + p2 + p3) * 0.25;
         float dist = length(center - cameraPos);
-        float maxLevel = 32.0;
-        float tessLevel = clamp(maxLevel / (dist * 0.1 + 1.0), 1.0, maxLevel);
+        float maxLevel = 64.0;
+        float tessLevel = clamp(maxLevel / (dist * 0.15 + 1.0), 1.0, maxLevel);
         gl_TessLevelOuter[0] = tessLevel;
         gl_TessLevelOuter[1] = tessLevel;
         gl_TessLevelOuter[2] = tessLevel;
@@ -147,28 +146,26 @@ GLuint compileShader(GLenum type, const char* source) {
     return shader;
 }
 
-GLuint loadHeightMapFromFile(const std::string& filename) {
-    sf::Image img;
-    if (!img.loadFromFile(filename)) {
-        std::cerr << "[ERROR] Не удалось загрузить изображение: " << filename << std::endl;
-        return 0;
-    }
-    unsigned int w = img.getSize().x;
-    unsigned int h = img.getSize().y;
-    std::vector<unsigned char> data(w * h);
+// Процедурная генерация карты высот 256×256 (синусы/косинусы)
+GLuint generateHeightMap() {
+    const int width = 256;
+    const int height = 256;
+    std::vector<unsigned char> data(width * height);
 
-    for (unsigned int y = 0; y < h; ++y) {
-        for (unsigned int x = 0; x < w; ++x) {
-            sf::Color c = img.getPixel(x, h - 1 - y); // Инвертируем Y для OpenGL
-            // Простая конвертация в grayscale (luminance)
-            data[y * w + x] = static_cast<unsigned char>(0.299f * c.r + 0.587f * c.g + 0.114f * c.b);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            float nx = static_cast<float>(x) / width;
+            float ny = static_cast<float>(y) / height;
+            // Простой шум на основе синусов и косинусов
+            float val = (sin(nx * 10.0f) * cos(ny * 10.0f) + 1.0f) * 0.5f;
+            data[y * width + x] = static_cast<unsigned char>(val * 255.0f);
         }
     }
 
     GLuint tex;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data.data());
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -237,8 +234,8 @@ int main() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    GLuint heightMapTex = loadHeightMapFromFile("height_map2.jpg");
-    if (heightMapTex == 0) return -1;
+    // Генерируем процедурную карту высот вместо загрузки из файла
+    GLuint heightMapTex = generateHeightMap();
 
     glEnable(GL_DEPTH_TEST);
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
@@ -249,6 +246,7 @@ int main() {
     bool showNormals = false;
     bool nPressed = false;
 
+    // Кешируем локации uniform'ов для скорости
     GLint locProj = glGetUniformLocation(program, "projection");
     GLint locView = glGetUniformLocation(program, "view");
     GLint locModel = glGetUniformLocation(program, "model");
@@ -280,13 +278,20 @@ int main() {
                 cameraFront = glm::normalize(front);
             }
             else if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::N && !nPressed) { showNormals = !showNormals; nPressed = true; }
+                if (event.key.code == sf::Keyboard::Escape) {
+                    running = false; // Выход по Esc
+                }
+                if (event.key.code == sf::Keyboard::N && !nPressed) {
+                    showNormals = !showNormals;
+                    nPressed = true;
+                }
             }
             else if (event.type == sf::Event::KeyReleased) {
                 if (event.key.code == sf::Keyboard::N) nPressed = false;
             }
         }
 
+        // Центрируем мышь для плавного вращения
         sf::Vector2i center(window.getSize().x / 2, window.getSize().y / 2);
         sf::Mouse::setPosition(center, window);
         lastMouseX = center.x; lastMouseY = center.y;
