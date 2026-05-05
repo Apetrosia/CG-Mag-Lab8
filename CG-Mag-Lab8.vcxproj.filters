@@ -18,6 +18,9 @@
     <Image Include="height_map.jpg">
       <Filter>Исходные файлы</Filter>
     </Image>
+    <Image Include="height_map1.jpg">
+      <Filter>Файлы ресурсов</Filter>
+    </Image>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">

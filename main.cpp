@@ -1,5 +1,6 @@
 #include <GL/glew.h>
 #include <SFML/Window.hpp>
+#include <SFML/Graphics.hpp>
 #include <SFML/OpenGL.hpp>
 #include <iostream>
 #include <vector>
@@ -26,33 +27,23 @@ const char* tcsSource = R"glsl(
 layout (vertices = 4) out;
 in vec2 TexCoord[];
 out vec2 TextureCoord[];
-
-uniform vec3 cameraPos; // Позиция камеры
-
+uniform vec3 cameraPos;
 void main() {
     gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
     TextureCoord[gl_InvocationID] = TexCoord[gl_InvocationID];
-
     if(gl_InvocationID == 0) {
-        // Центр патча
         vec3 p0 = gl_in[0].gl_Position.xyz;
         vec3 p1 = gl_in[1].gl_Position.xyz;
         vec3 p2 = gl_in[2].gl_Position.xyz;
         vec3 p3 = gl_in[3].gl_Position.xyz;
         vec3 center = (p0 + p1 + p2 + p3) * 0.25;
-
-        // Вычисляем расстояние от камеры до центра патча
-        float distance = distance(center, cameraPos);
-
-        // Расчет уровня тесселяции
+        float dist = length(center - cameraPos);
         float maxLevel = 32.0;
-        float tessLevel = max(1.0, maxLevel / (distance * 0.2)); // Коэффициент 0.2 для наглядности изменения
-
+        float tessLevel = clamp(maxLevel / (dist * 0.1 + 1.0), 1.0, maxLevel);
         gl_TessLevelOuter[0] = tessLevel;
         gl_TessLevelOuter[1] = tessLevel;
         gl_TessLevelOuter[2] = tessLevel;
         gl_TessLevelOuter[3] = tessLevel;
-
         gl_TessLevelInner[0] = tessLevel;
         gl_TessLevelInner[1] = tessLevel;
     }
@@ -63,64 +54,31 @@ void main() {
 const char* tesSource = R"glsl(
 #version 410 core
 layout (quads, fractional_even_spacing, ccw) in;
-
 uniform sampler2D heightMap;
 uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
-
 in vec2 TextureCoord[];
 out float Height;
-
 void main() {
     float u = gl_TessCoord.x;
     float v = gl_TessCoord.y;
-
     vec4 p00 = gl_in[0].gl_Position;
     vec4 p01 = gl_in[1].gl_Position;
     vec4 p10 = gl_in[2].gl_Position;
     vec4 p11 = gl_in[3].gl_Position;
-
     vec4 p0 = mix(p00, p01, u);
     vec4 p1 = mix(p10, p11, u);
     vec4 p = mix(p0, p1, v);
 
-    vec2 t00 = TextureCoord[0];
-    vec2 t01 = TextureCoord[1];
-    vec2 t10 = TextureCoord[2];
-    vec2 t11 = TextureCoord[3];
+    vec2 t00 = TextureCoord[0]; vec2 t01 = TextureCoord[1];
+    vec2 t10 = TextureCoord[2]; vec2 t11 = TextureCoord[3];
+    vec2 texCoord = mix(mix(t00, t01, u), mix(t10, t11, u), v);
 
-    vec2 t0 = mix(t00, t01, u);
-    vec2 t1 = mix(t10, t11, u);
-    vec2 texCoord = mix(t0, t1, v);
-
-    float height = texture(heightMap, texCoord).r;
-    Height = height;
-
-    // Смещение по Y (вверх) на основе карты высот
-    p.y += height * 2.0;
-
+    float h = texture(heightMap, texCoord).r;
+    Height = h;
+    p.y += h * 2.0;
     gl_Position = projection * view * model * p;
-}
-)glsl";
-
-// Fragment Shader
-const char* fragmentShaderSource = R"glsl(
-#version 410 core
-out vec4 FragColor;
-in float HeightOut; // Из Geometry Shader
-
-in vec3 vertColor;
-uniform bool showNormals;
-
-void main() {
-    if (showNormals) {
-        FragColor = vec4(vertColor, 1.0);
-    } else {
-        // Простая раскраска на основе высоты
-        vec3 color = mix(vec3(0.2, 0.6, 0.2), vec3(0.9, 0.9, 0.9), HeightOut);
-        FragColor = vec4(color, 1.0);
-    }
 }
 )glsl";
 
@@ -128,61 +86,48 @@ void main() {
 const char* geometryShaderSource = R"glsl(
 #version 410 core
 layout(triangles) in;
-// Нам нужно выводить и треугольники (для ландшафта), и линии (для нормалей).
-// Максимум 3 вершины для исходного треугольника + 6 вершин для трех линий = 9 вершин
-layout(triangle_strip, max_vertices = 9) out; 
-
+layout(triangle_strip, max_vertices = 9) out;
 in float Height[];
 out float HeightOut;
 out vec3 vertColor;
-
 uniform bool showNormals;
-
 void main() {
-    // 1. Всегда пробрасываем сам ландшафт (исходные треугольники)
     for (int i = 0; i < 3; i++) {
         gl_Position = gl_in[i].gl_Position;
         HeightOut = Height[i];
-        vertColor = vec3(0.0); // Не используется, если showNormals == false (точнее используется как-то, но мы раскрашиваем по высоте)
+        vertColor = vec3(0.0);
         EmitVertex();
     }
     EndPrimitive();
 
-    // 2. Если включен режим отладки, рисуем нормаль из центра треугольника
     if (showNormals) {
-        // Вычисляем центр треугольника
         vec3 p0 = gl_in[0].gl_Position.xyz;
         vec3 p1 = gl_in[1].gl_Position.xyz;
         vec3 p2 = gl_in[2].gl_Position.xyz;
         vec3 center = (p0 + p1 + p2) / 3.0;
+        vec3 normal = normalize(cross(p1 - p0, p2 - p0));
+        float len = 0.5;
 
-        // Вычисляем нормаль (в screen space / clip space, но для отладки пойдет)
-        vec3 v0 = p1 - p0;
-        vec3 v1 = p2 - p0;
-        vec3 normal = normalize(cross(v0, v1));
-        
-        float normalLength = 2.0;
-
-        // Рисуем "линию" как очень тонкий треугольник (костыль, так как layout один)
-        // В OpenGL Geometry Shader может выдавать только один тип примитивов. 
-        // Мы используем triangle_strip.
-        
-        // Вершина 1: Центр (Зеленая)
-        gl_Position = vec4(center, gl_in[0].gl_Position.w);
-        vertColor = vec3(0.0, 1.0, 0.0); 
-        EmitVertex();
-
-        // Вершина 2: Смещение (Красная)
-        gl_Position = vec4(center + normal * normalLength, gl_in[0].gl_Position.w);
-        vertColor = vec3(1.0, 0.0, 0.0); 
-        EmitVertex();
-        
-        // Вершина 3: Маленькое смещение для формирования вырожденного треугольника
-        gl_Position = vec4(center + normal * normalLength + vec3(0.01, 0.0, 0.0), gl_in[0].gl_Position.w);
-        vertColor = vec3(1.0, 0.0, 0.0); 
-        EmitVertex();
-
+        gl_Position = vec4(center, gl_in[0].gl_Position.w); vertColor = vec3(0.0, 1.0, 0.0); EmitVertex();
+        gl_Position = vec4(center + normal * len, gl_in[0].gl_Position.w); vertColor = vec3(1.0, 0.0, 0.0); EmitVertex();
+        gl_Position = vec4(center + normal * len + vec3(0.001, 0.0, 0.0), gl_in[0].gl_Position.w); vertColor = vec3(1.0, 0.0, 0.0); EmitVertex();
         EndPrimitive();
+    }
+}
+)glsl";
+
+// Fragment Shader
+const char* fragmentShaderSource = R"glsl(
+#version 410 core
+out vec4 FragColor;
+in float HeightOut;
+in vec3 vertColor;
+uniform bool showNormals;
+void main() {
+    if (showNormals) {
+        FragColor = vec4(vertColor, 1.0);
+    } else {
+        FragColor = vec4(mix(vec3(0.2, 0.6, 0.2), vec3(0.9, 0.9, 0.9), HeightOut), 1.0);
     }
 }
 )glsl";
@@ -196,44 +141,48 @@ GLuint compileShader(GLenum type, const char* source) {
     if (!success) {
         char infoLog[512];
         glGetShaderInfoLog(shader, 512, NULL, infoLog);
-        std::cout << "SHADER COMPILATION ERROR\n" << infoLog << std::endl;
+        std::cerr << "SHADER COMPILATION ERROR: " << infoLog << std::endl;
+        return 0;
     }
     return shader;
 }
 
-// Генерация текстурной карты высот (процедурный шум)
-GLuint generateHeightMap() {
-    const int width = 256;
-    const int height = 256;
-    std::vector<unsigned char> data(width * height);
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float nx = (float)x / width;
-            float ny = (float)y / height;
-            // Простой шум на основе синусов
-            float val = (sin(nx * 10.0f) * cos(ny * 10.0f) + 1.0f) * 0.5f;
-            data[y * width + x] = static_cast<unsigned char>(val * 255.0f);
+GLuint loadHeightMapFromFile(const std::string& filename) {
+    sf::Image img;
+    if (!img.loadFromFile(filename)) {
+        std::cerr << "[ERROR] Не удалось загрузить изображение: " << filename << std::endl;
+        return 0;
+    }
+    unsigned int w = img.getSize().x;
+    unsigned int h = img.getSize().y;
+    std::vector<unsigned char> data(w * h);
+
+    for (unsigned int y = 0; y < h; ++y) {
+        for (unsigned int x = 0; x < w; ++x) {
+            sf::Color c = img.getPixel(x, h - 1 - y); // Инвертируем Y для OpenGL
+            // Простая конвертация в grayscale (luminance)
+            data[y * w + x] = static_cast<unsigned char>(0.299f * c.r + 0.587f * c.g + 0.114f * c.b);
         }
     }
 
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, data.data());
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    return texture;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    return tex;
 }
 
 glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 15.0f);
 glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-
 float yaw = -90.0f;
 float pitch = 0.0f;
-
 bool firstMouse = true;
-int lastMouseX, lastMouseY;
+int lastMouseX = 0, lastMouseY = 0;
 
 int main() {
     sf::ContextSettings settings;
@@ -244,100 +193,86 @@ int main() {
     settings.minorVersion = 1;
     settings.attributeFlags = sf::ContextSettings::Core;
 
-    sf::Window window(sf::VideoMode(1280, 720), "Lab 8: GPU Tessellation with SFML", sf::Style::Default, settings);
+    sf::Window window(sf::VideoMode(1280, 720), "Lab 8: GPU Tessellation", sf::Style::Default, settings);
     window.setVerticalSyncEnabled(true);
 
-    if (glewInit() != GLEW_OK) {
-        std::cerr << "Failed to initialize GLEW" << std::endl;
-        return -1;
+    if (glewInit() != GLEW_OK) { std::cerr << "Failed to initialize GLEW" << std::endl; return -1; }
+
+    GLuint vShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
+    GLuint tcShader = compileShader(GL_TESS_CONTROL_SHADER, tcsSource);
+    GLuint teShader = compileShader(GL_TESS_EVALUATION_SHADER, tesSource);
+    GLuint gShader = compileShader(GL_GEOMETRY_SHADER, geometryShaderSource);
+    GLuint fShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
+
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vShader); glAttachShader(program, tcShader); glAttachShader(program, teShader);
+    glAttachShader(program, gShader); glAttachShader(program, fShader);
+    glLinkProgram(program);
+
+    int linkSuccess;
+    glGetProgramiv(program, GL_LINK_STATUS, &linkSuccess);
+    if (!linkSuccess) {
+        char infoLog[512]; glGetProgramInfoLog(program, 512, nullptr, infoLog);
+        std::cerr << "PROGRAM LINK ERROR: " << infoLog << std::endl;
     }
 
-    GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
-    GLuint tcsShader = compileShader(GL_TESS_CONTROL_SHADER, tcsSource);
-    GLuint tesShader = compileShader(GL_TESS_EVALUATION_SHADER, tesSource);
-    GLuint geometryShader = compileShader(GL_GEOMETRY_SHADER, geometryShaderSource);
-    GLuint fragmentShader = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
-
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, tcsShader);
-    glAttachShader(shaderProgram, tesShader);
-    glAttachShader(shaderProgram, geometryShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(tcsShader);
-    glDeleteShader(tesShader);
-    glDeleteShader(geometryShader);
-    glDeleteShader(fragmentShader);
+    glDeleteShader(vShader); glDeleteShader(tcShader); glDeleteShader(teShader);
+    glDeleteShader(gShader); glDeleteShader(fShader);
 
     float vertices[] = {
-        // x, y, z,          u, v
-       -5.0f, 0.0f, -5.0f,   0.0f, 0.0f,
-        5.0f, 0.0f, -5.0f,   1.0f, 0.0f,
-       -5.0f, 0.0f,  5.0f,   0.0f, 1.0f,
-        5.0f, 0.0f,  5.0f,   1.0f, 1.0f
+        -5.0f, 0.0f, -5.0f,  0.0f, 0.0f,
+         5.0f, 0.0f, -5.0f,  1.0f, 0.0f,
+        -5.0f, 0.0f,  5.0f,  0.0f, 1.0f,
+         5.0f, 0.0f,  5.0f,  1.0f, 1.0f
     };
 
     GLuint VAO, VBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
-
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    GLuint heightMapTex = generateHeightMap();
+    GLuint heightMapTex = loadHeightMapFromFile("height_map2.jpg");
+    if (heightMapTex == 0) return -1;
 
     glEnable(GL_DEPTH_TEST);
-    
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
     window.setMouseCursorGrabbed(true);
     window.setMouseCursorVisible(false);
 
     bool running = true;
-    bool showNormals = false; // Флаг режима показа нормалей
-    bool nKeyPressed = false; // Проверка отскока клавиши
+    bool showNormals = false;
+    bool nPressed = false;
+
+    GLint locProj = glGetUniformLocation(program, "projection");
+    GLint locView = glGetUniformLocation(program, "view");
+    GLint locModel = glGetUniformLocation(program, "model");
+    GLint locCamPos = glGetUniformLocation(program, "cameraPos");
+    GLint locShowNorm = glGetUniformLocation(program, "showNormals");
+    GLint locHeightMap = glGetUniformLocation(program, "heightMap");
 
     while (running) {
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed) {
-                running = false;
-            }
-            else if (event.type == sf::Event::Resized) {
-                glViewport(0, 0, event.size.width, event.size.height);
-            }
+            if (event.type == sf::Event::Closed) running = false;
+            else if (event.type == sf::Event::Resized) glViewport(0, 0, event.size.width, event.size.height);
             else if (event.type == sf::Event::MouseMoved) {
                 if (firstMouse) {
-                    lastMouseX = event.mouseMove.x;
-                    lastMouseY = event.mouseMove.y;
+                    lastMouseX = event.mouseMove.x; lastMouseY = event.mouseMove.y;
                     firstMouse = false;
                 }
-
-                float xoffset = event.mouseMove.x - lastMouseX;
-                float yoffset = lastMouseY - event.mouseMove.y;
-
-                lastMouseX = event.mouseMove.x;
-                lastMouseY = event.mouseMove.y;
-
-                float sensitivity = 0.1f;
-                xoffset *= sensitivity;
-                yoffset *= sensitivity;
-
-                yaw += xoffset;
-                pitch += yoffset;
-
+                float xoff = event.mouseMove.x - lastMouseX;
+                float yoff = lastMouseY - event.mouseMove.y;
+                lastMouseX = event.mouseMove.x; lastMouseY = event.mouseMove.y;
+                float sens = 0.1f;
+                yaw += xoff * sens; pitch += yoff * sens;
                 if (pitch > 89.0f) pitch = 89.0f;
                 if (pitch < -89.0f) pitch = -89.0f;
-
                 glm::vec3 front;
                 front.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
                 front.y = sin(glm::radians(pitch));
@@ -345,73 +280,45 @@ int main() {
                 cameraFront = glm::normalize(front);
             }
             else if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::N && !nKeyPressed) {
-                    showNormals = !showNormals;
-                    nKeyPressed = true;
-                }
+                if (event.key.code == sf::Keyboard::N && !nPressed) { showNormals = !showNormals; nPressed = true; }
             }
             else if (event.type == sf::Event::KeyReleased) {
-                if (event.key.code == sf::Keyboard::N) {
-                    nKeyPressed = false;
-                }
+                if (event.key.code == sf::Keyboard::N) nPressed = false;
             }
         }
-        
-        sf::Vector2i centerPos(window.getSize().x / 2, window.getSize().y / 2);
-        sf::Mouse::setPosition(centerPos, window);
-        lastMouseX = centerPos.x;
-        lastMouseY = centerPos.y;
 
-        float cameraSpeed = 0.05f;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift)) {
-            cameraSpeed = 0.25f;
-        }
+        sf::Vector2i center(window.getSize().x / 2, window.getSize().y / 2);
+        sf::Mouse::setPosition(center, window);
+        lastMouseX = center.x; lastMouseY = center.y;
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
-            cameraPos += cameraSpeed * cameraFront;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S) || sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
-            cameraPos -= cameraSpeed * cameraFront;
-        }
-        glm::vec3 cameraRight = glm::normalize(glm::cross(cameraFront, cameraUp));
-        glm::vec3 localUp = glm::normalize(glm::cross(cameraRight, cameraFront));
+        float speed = sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) ? 0.25f : 0.05f;
+        glm::vec3 right = glm::normalize(glm::cross(cameraFront, cameraUp));
+        glm::vec3 up = glm::normalize(glm::cross(right, cameraFront));
 
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
-            cameraPos -= cameraRight * cameraSpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D) || sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
-            cameraPos += cameraRight * cameraSpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) {
-            cameraPos += localUp * cameraSpeed;
-        }
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::RControl)) {
-            cameraPos -= localUp * cameraSpeed;
-        }
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W)) cameraPos += speed * cameraFront;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S)) cameraPos -= speed * cameraFront;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A)) cameraPos -= speed * right;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D)) cameraPos += speed * right;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) cameraPos += speed * up;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl)) cameraPos -= speed * up;
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(program);
 
-        glUseProgram(shaderProgram);
-
-        glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)window.getSize().x / (float)window.getSize().y, 0.1f, 100.0f);
-        
+        glm::mat4 proj = glm::perspective(glm::radians(45.0f), (float)window.getSize().x / window.getSize().y, 0.1f, 100.0f);
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        glm::mat4 model = glm::mat4(1.0f);
+        glm::mat4 model(1.0f);
 
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-        
-        // Передаем позицию камеры в TCS
-        glUniform3fv(glGetUniformLocation(shaderProgram, "cameraPos"), 1, glm::value_ptr(cameraPos));
-
-        // Передаем uniform'ы для режима нормалей
-        glUniform1i(glGetUniformLocation(shaderProgram, "showNormals"), showNormals ? 1 : 0);
+        glUniformMatrix4fv(locProj, 1, GL_FALSE, glm::value_ptr(proj));
+        glUniformMatrix4fv(locView, 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(model));
+        glUniform3fv(locCamPos, 1, glm::value_ptr(cameraPos));
+        glUniform1i(locShowNorm, showNormals ? 1 : 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, heightMapTex);
-        glUniform1i(glGetUniformLocation(shaderProgram, "heightMap"), 0);
+        glUniform1i(locHeightMap, 0);
 
         glBindVertexArray(VAO);
         glPatchParameteri(GL_PATCH_VERTICES, 4);
@@ -422,8 +329,7 @@ int main() {
 
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
-    glDeleteProgram(shaderProgram);
+    glDeleteProgram(program);
     glDeleteTextures(1, &heightMapTex);
-
     return 0;
 }

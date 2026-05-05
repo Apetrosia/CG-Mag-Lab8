@@ -140,6 +140,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <Image Include="height_map.jpg" />
+    <Image Include="height_map1.jpg" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
