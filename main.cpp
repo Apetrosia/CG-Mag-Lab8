@@ -4,8 +4,6 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
-
-// Математические функции для простых перемещений, если нет GLM
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -189,7 +187,6 @@ void main() {
 }
 )glsl";
 
-// Компиляция шейдеров
 GLuint compileShader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, NULL);
@@ -228,7 +225,6 @@ GLuint generateHeightMap() {
     return texture;
 }
 
-// Глобальные переменные для камеры
 glm::vec3 cameraPos = glm::vec3(0.0f, 5.0f, 15.0f);
 glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
@@ -248,7 +244,7 @@ int main() {
     settings.minorVersion = 1;
     settings.attributeFlags = sf::ContextSettings::Core;
 
-    sf::Window window(sf::VideoMode(800, 600), "Lab 8: GPU Tessellation with SFML", sf::Style::Default, settings);
+    sf::Window window(sf::VideoMode(1280, 720), "Lab 8: GPU Tessellation with SFML", sf::Style::Default, settings);
     window.setVerticalSyncEnabled(true);
 
     if (glewInit() != GLEW_OK) {
@@ -276,7 +272,6 @@ int main() {
     glDeleteShader(geometryShader);
     glDeleteShader(fragmentShader);
 
-    // Вершины патча (квадрат 10x10)
     float vertices[] = {
         // x, y, z,          u, v
        -5.0f, 0.0f, -5.0f,   0.0f, 0.0f,
@@ -302,10 +297,8 @@ int main() {
 
     glEnable(GL_DEPTH_TEST);
     
-    // Включаем отображение сетки для демонстрации тесселяции
     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 
-    // Захватываем курсор мыши
     window.setMouseCursorGrabbed(true);
     window.setMouseCursorVisible(false);
 
@@ -330,7 +323,7 @@ int main() {
                 }
 
                 float xoffset = event.mouseMove.x - lastMouseX;
-                float yoffset = lastMouseY - event.mouseMove.y; // обратный по Y
+                float yoffset = lastMouseY - event.mouseMove.y;
 
                 lastMouseX = event.mouseMove.x;
                 lastMouseY = event.mouseMove.y;
@@ -364,16 +357,14 @@ int main() {
             }
         }
         
-        // Удерживаем мышь в центре окна
         sf::Vector2i centerPos(window.getSize().x / 2, window.getSize().y / 2);
         sf::Mouse::setPosition(centerPos, window);
         lastMouseX = centerPos.x;
         lastMouseY = centerPos.y;
 
-        // Управление с клавиатуры (WASD и стрелочки)
         float cameraSpeed = 0.05f;
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift) || sf::Keyboard::isKeyPressed(sf::Keyboard::RShift)) {
-            cameraSpeed = 0.25f; // Ускорение при зажатом Shift
+            cameraSpeed = 0.25f;
         }
 
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
@@ -392,10 +383,10 @@ int main() {
             cameraPos += cameraRight * cameraSpeed;
         }
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space)) {
-            cameraPos += localUp * cameraSpeed; // Движение вверх относительно камеры
+            cameraPos += localUp * cameraSpeed;
         }
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::LControl) || sf::Keyboard::isKeyPressed(sf::Keyboard::RControl)) {
-            cameraPos -= localUp * cameraSpeed; // Движение вниз относительно камеры
+            cameraPos -= localUp * cameraSpeed;
         }
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
